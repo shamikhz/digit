@@ -641,12 +641,30 @@ footer {
     color: var(--success);
 }
 
+.button-group {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: var(--spacing-sm);
+}
+
+.btn-save {
+    flex: 1;
+    background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+    color: white;
+    border: none;
+    padding: 0.5rem;
+    font-size: 0.875rem;
+}
+
+.btn-save:hover {
+    background: linear-gradient(135deg, #2563eb, #1e40af);
+}
+
 .btn-reset {
+    flex: 1;
     background: rgba(239, 68, 68, 0.2);
     color: var(--danger);
     border: 1px solid rgba(239, 68, 68, 0.3);
-    margin-top: var(--spacing-sm);
-    width: 100%;
     padding: 0.5rem;
     font-size: 0.875rem;
 }

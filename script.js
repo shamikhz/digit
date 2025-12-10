@@ -1,4 +1,21 @@
 // ===========================
+// Firebase Configuration
+// ===========================
+const firebaseConfig = {
+    apiKey: "AIzaSyD0XTsjeH8CKKIkVD5U5KKKkaTUf92hB-w",
+    authDomain: "harmonia-dmbqa.firebaseapp.com",
+    projectId: "harmonia-dmbqa",
+    storageBucket: "harmonia-dmbqa.firebasestorage.app",
+    messagingSenderId: "985369858331",
+    appId: "1:985369858331:web:916406ca3d10f11d0003be"
+};
+
+// Initialize Firebase
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+const storage = firebase.storage();
+
+// ===========================
 // Global Variables
 // ===========================
 let canvas, ctx;
@@ -8,9 +25,20 @@ let lastX = 0;
 let lastY = 0;
 let currentImageTensor = null;
 let currentPrediction = null;
-let trainingData = [];
 let totalSamples = 0;
 let correctPredictions = 0;
+
+// Unique session ID for this user/browser
+const SESSION_ID = getOrCreateSessionId();
+
+function getOrCreateSessionId() {
+    let id = localStorage.getItem('drawGuess_sessionId');
+    if (!id) {
+        id = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        localStorage.setItem('drawGuess_sessionId', id);
+    }
+    return id;
+}
 
 // ===========================
 // Initialize Application
@@ -20,7 +48,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await createTrainableModel();
     setupEventListeners();
     initPredictionDisplay();
-    loadTrainingStats();
+    await loadFromFirebase();
     hideFeedbackSection();
 });
 
@@ -122,6 +150,9 @@ function setupEventListeners() {
             trainOnDigit(currentPrediction, true);
         }
     });
+
+    // Save model button
+    document.getElementById('saveModelBtn').addEventListener('click', saveModelToFirebase);
 
     // Reset model button
     document.getElementById('resetModelBtn').addEventListener('click', resetModel);
@@ -391,7 +422,9 @@ async function trainOnDigit(digit, isCorrect = false) {
         if (isCorrect) {
             correctPredictions++;
         }
-        saveTrainingStats();
+
+        // Save to Firebase
+        await saveStatsToFirebase();
         updateStatsDisplay();
 
         // Show success message
@@ -421,6 +454,158 @@ async function trainOnDigit(digit, isCorrect = false) {
 }
 
 // ===========================
+// Firebase: Save Stats
+// ===========================
+async function saveStatsToFirebase() {
+    try {
+        await db.collection('drawGuess').doc(SESSION_ID).set({
+            totalSamples: totalSamples,
+            correctPredictions: correctPredictions,
+            lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+
+        updateSyncStatus('✅ Synced');
+        console.log('Stats saved to Firebase');
+    } catch (error) {
+        console.error('Error saving stats to Firebase:', error);
+        updateSyncStatus('❌ Sync failed');
+    }
+}
+
+// ===========================
+// Firebase: Load Stats and Model
+// ===========================
+async function loadFromFirebase() {
+    updateSyncStatus('🔄 Loading...');
+
+    try {
+        // Load stats from Firestore
+        const doc = await db.collection('drawGuess').doc(SESSION_ID).get();
+
+        if (doc.exists) {
+            const data = doc.data();
+            totalSamples = data.totalSamples || 0;
+            correctPredictions = data.correctPredictions || 0;
+            console.log('Stats loaded from Firebase:', data);
+        }
+
+        // Try to load model weights from Storage
+        await loadModelFromFirebase();
+
+        updateStatsDisplay();
+        updateSyncStatus('✅ Connected');
+
+    } catch (error) {
+        console.error('Error loading from Firebase:', error);
+        updateSyncStatus('❌ Connection failed');
+    }
+}
+
+// ===========================
+// Firebase: Save Model Weights
+// ===========================
+async function saveModelToFirebase() {
+    if (!model) {
+        alert('No model to save!');
+        return;
+    }
+
+    updateStatus('Saving model to cloud...', 'analyzing');
+    updateSyncStatus('🔄 Uploading...');
+
+    try {
+        // Save model to a temporary location using TensorFlow.js
+        const saveResult = await model.save(tf.io.withSaveHandler(async (artifacts) => {
+            // Convert model weights to JSON string
+            const weightsData = {
+                modelTopology: artifacts.modelTopology,
+                weightSpecs: artifacts.weightSpecs,
+                weightData: Array.from(new Uint8Array(artifacts.weightData))
+            };
+
+            // Save to Firestore (for smaller models) or Storage
+            const modelJson = JSON.stringify(weightsData);
+            const blob = new Blob([modelJson], { type: 'application/json' });
+
+            // Upload to Firebase Storage
+            const storageRef = storage.ref();
+            const modelRef = storageRef.child(`models/${SESSION_ID}/model.json`);
+            await modelRef.put(blob);
+
+            console.log('Model saved to Firebase Storage');
+            return { modelArtifactsInfo: { dateSaved: new Date(), modelTopologyType: 'JSON' } };
+        }));
+
+        updateStatus('Model saved to cloud!', 'ready');
+        updateSyncStatus('✅ Model saved');
+
+        // Also update the stats with model save timestamp
+        await db.collection('drawGuess').doc(SESSION_ID).set({
+            modelSaved: firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+
+    } catch (error) {
+        console.error('Error saving model to Firebase:', error);
+        updateStatus('Failed to save model', 'error');
+        updateSyncStatus('❌ Save failed');
+    }
+}
+
+// ===========================
+// Firebase: Load Model Weights
+// ===========================
+async function loadModelFromFirebase() {
+    try {
+        const storageRef = storage.ref();
+        const modelRef = storageRef.child(`models/${SESSION_ID}/model.json`);
+
+        // Check if model exists
+        const url = await modelRef.getDownloadURL();
+
+        // Download model data
+        const response = await fetch(url);
+        const weightsData = await response.json();
+
+        // Reconstruct the weights
+        const weightData = new Uint8Array(weightsData.weightData).buffer;
+
+        // Load weights into model
+        const weightSpecs = weightsData.weightSpecs;
+        const weights = tf.io.decodeWeights(weightData, weightSpecs);
+
+        // Set weights to model
+        let weightIndex = 0;
+        for (const layer of model.layers) {
+            const layerWeights = layer.getWeights();
+            if (layerWeights.length > 0) {
+                const newWeights = [];
+                for (let i = 0; i < layerWeights.length; i++) {
+                    const weightName = Object.keys(weights)[weightIndex];
+                    if (weightName && weights[weightName]) {
+                        newWeights.push(weights[weightName]);
+                        weightIndex++;
+                    }
+                }
+                if (newWeights.length === layerWeights.length) {
+                    layer.setWeights(newWeights);
+                }
+            }
+        }
+
+        console.log('Model loaded from Firebase Storage');
+        updateStatus('Model loaded from cloud!', 'ready');
+
+    } catch (error) {
+        // Model doesn't exist yet - that's okay
+        if (error.code === 'storage/object-not-found') {
+            console.log('No saved model found - using fresh model');
+        } else {
+            console.error('Error loading model from Firebase:', error);
+        }
+    }
+}
+
+// ===========================
 // Reset Model
 // ===========================
 async function resetModel() {
@@ -438,8 +623,17 @@ async function resetModel() {
         // Reset stats
         totalSamples = 0;
         correctPredictions = 0;
-        saveTrainingStats();
+        await saveStatsToFirebase();
         updateStatsDisplay();
+
+        // Delete saved model from Firebase
+        try {
+            const storageRef = storage.ref();
+            const modelRef = storageRef.child(`models/${SESSION_ID}/model.json`);
+            await modelRef.delete();
+        } catch (e) {
+            // Model might not exist
+        }
 
         // Clear canvas
         clearCanvas();
@@ -460,19 +654,8 @@ function hideFeedbackSection() {
 }
 
 // ===========================
-// Training Stats
+// Update Stats Display
 // ===========================
-function saveTrainingStats() {
-    localStorage.setItem('drawGuess_totalSamples', totalSamples);
-    localStorage.setItem('drawGuess_correctPredictions', correctPredictions);
-}
-
-function loadTrainingStats() {
-    totalSamples = parseInt(localStorage.getItem('drawGuess_totalSamples') || '0');
-    correctPredictions = parseInt(localStorage.getItem('drawGuess_correctPredictions') || '0');
-    updateStatsDisplay();
-}
-
 function updateStatsDisplay() {
     document.getElementById('sampleCount').textContent = totalSamples;
 
@@ -480,6 +663,16 @@ function updateStatsDisplay() {
         ? ((correctPredictions / totalSamples) * 100).toFixed(1) + '%'
         : '--';
     document.getElementById('accuracyDisplay').textContent = accuracy;
+}
+
+// ===========================
+// Update Sync Status
+// ===========================
+function updateSyncStatus(status) {
+    const syncEl = document.getElementById('syncStatus');
+    if (syncEl) {
+        syncEl.textContent = status;
+    }
 }
 
 // ===========================

@@ -87,7 +87,14 @@
                         <span>Model accuracy:</span>
                         <span id="accuracyDisplay">--</span>
                     </div>
-                    <button id="resetModelBtn" class="btn btn-reset">Reset Model</button>
+                    <div class="stat-row">
+                        <span>Cloud sync:</span>
+                        <span id="syncStatus">🔄 Loading...</span>
+                    </div>
+                    <div class="button-group">
+                        <button id="saveModelBtn" class="btn btn-save">💾 Save Model</button>
+                        <button id="resetModelBtn" class="btn btn-reset">Reset Model</button>
+                    </div>
                 </div>
 
                 <div class="all-predictions" id="allPredictions">
@@ -100,9 +107,14 @@
         </main>
 
         <footer>
-            <p>Powered by TensorFlow.js & MNIST • AI learns from your drawings!</p>
+            <p>Powered by TensorFlow.js & Firebase • AI learns from your drawings!</p>
         </footer>
     </div>
+
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
 
     <!-- TensorFlow.js -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
